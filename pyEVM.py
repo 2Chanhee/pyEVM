@@ -8,14 +8,13 @@
 
 import numpy as np
 import cv2
-import butter
 from matplotlib import pyplot as plt
 
 
 # In[2]:
 
 
-# 1. Read Video file
+# Read Video file
 
 # generate video object
 filename = "./input/original_video_SR30.mp4"
@@ -25,7 +24,7 @@ cap = cv2.VideoCapture(filename)
 # In[3]:
 
 
-# 2. Gray Scale로 변환
+# RGB to Gray Scale
 
 # 첫번째 프레임 읽기
 ret, frame = cap.read()
@@ -39,43 +38,20 @@ gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 print("Shape of image is : ",gray.shape)
 
 
-# ### Histogram 과 CLAHE
-
 # In[4]:
 
 
-# contrast limit가 2이고 title의 size는 8X8
-clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4,4))
-img2 = clahe.apply(gray)
-plt.subplot(211),plt.imshow(gray, cmap = 'gray'),plt.title('Original')
-plt.subplot(212),plt.imshow(img2, cmap = 'gray'),plt.title('CLAHE')
-plt.show()
-
-
-# In[5]:
-
-
+# 이미지 명암값 대비를 크게 하여 더욱 선명하게 함
 def CLAHE(input):
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     output = clahe.apply(input)
     return output
 
 
-# ### Gaussian pyramid
-# In a Gaussian pyramid, subsequent images are **weighted down using a Gaussian average (Gaussian blur) and scaled down.** Each pixel containing a local average corresponds to a neighborhood pixel on a lower level of the pyramid. This technique is used especially in texture synthesis.
-# 
-# ![image.png](attachment:image.png)
-# 
-# ### Laplacian pyramid
-# A Laplacian pyramid is very similar to a Gaussian pyramid but saves the difference image of the blurred versions between each levels. Only the smallest level is not a difference image to enable reconstruction of the high resolution image using the difference images on higher levels. This technique can be used in image compression
-# 
-# __출처 : https://en.wikipedia.org/wiki/Pyramid_(image_processing)__
-
-# In[6]:
+# In[5]:
 
 
 # pyramid 안쓰고, resize함수로 피라미드 정의
-
 def pyramidDown(input):
     heigh, width = input.shape
     blur = cv2.GaussianBlur(input, (5,5), 0)
@@ -89,12 +65,12 @@ def pyramidUp(input):
     return output
 
 
-# In[7]:
+# In[6]:
 
 
-# 3. Generate Pyramid
-Gau_seq = [[],[],[],[],[],[],[]]
-Lap_seq = [[],[],[],[],[],[],[]]
+# Generate Pyramid
+GauSeq = [[],[],[],[],[],[],[]]
+LapSeq = [[],[],[],[],[],[],[]]
 
 while ret:
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -112,135 +88,97 @@ while ret:
         Down = pyramidDown(Down)
         Gau.append(Down)
     
-    Gau_copy = []
-    Gau_copy[:] = Gau
-    Gau_copy.reverse()
+    GauCopy = []
+    GauCopy[:] = Gau
+    GauCopy.reverse()
     
     for i in range (0,7):
-        Gau_seq[i].append(Gau_copy.pop())
+        GauSeq[i].append(GauCopy.pop())
 
     Lap = []
     for i in range (0, 7):
         Up = pyramidUp(Gau.pop())
         Lap.append(Gau[len(Gau)-1]-Up)
-
-    #Lap.reverse()
     
     for i in range (0,7):
-        Lap_seq[i].append(Lap.pop())
+        LapSeq[i].append(Lap.pop())
     ret, frame = cap.read()
+
+
+# In[7]:
+
+
+# Parameter Initializing 
+
+# SR : Sampling Rate
+SR = 2200
+Fn = SR/2
+# T : Period
+T = 1/SR
+# Frequency unit : Hz
+Low_freq = 350
+High_freq = 370
+# alpha is Magnification coefficient
+alpha = 200
 
 
 # In[8]:
 
 
-# 4. 확대 주파수 결정 및 필터링
-# Parameter Initializing 
-
-SR = 2200 # SR is Sampling Rate
-Fn = SR/2
-T = 1/SR # T is Period
-Low_freq = 350
-High_freq = 370
-alpha = 200
-
-
-# In[9]:
-
-
-# 원하는 주파수 선택적으로 확대 
-import time
-start = time.time()
-#f=open('python_bandpass.csv','a')
-
-frame_size = Lap_seq[0][0].shape
-
-# level 0
-for i in range (0, frame_size[0]):
-    for j in range (0, frame_size[1]):
-        time_stack = []
-        
-        for k in range (0, 100):
-            time_stack.append(Lap_seq[0][k][i][j])
+def filtering(target, lowFrequency, highFrequency, samplingRate, order = 5):
+    import butter
+    
+    frameSize = target[0].shape
+    for i in range (0, frameSize[0]):
+        for j in range (0, frameSize[1]):
+            timeStack = []
             
-        time_stack = butter.butter_bandpass_filter(time_stack, Low_freq, High_freq, SR, order=5)
-        #np.savetxt(f, np.column_stack(time_stack), delimiter=",", fmt='%s',  newline='\n')
-        for k in range (0, 100):
-            Lap_seq[0][k][i][j] += alpha * time_stack[k]
+            for k in range(0, len(target)):
+                timeStack.append(target[k][i][j])
             
-end = time.time()
-delay = end - start
-print("1st level : ", delay)
+            timeStack = butter.butter_bandpass_filter(timeStack, lowFrequency, highFrequency, samplingRate, order)
+            for k in range(0, len(target)):
+                target[k][i][j] += alpha * timeStack[k]
+    return target
 
 
 # In[10]:
 
 
-# level 1 
+# Bandpass filtering
+# 1min ~ 3min(Processor : i5-6200U)
+import time
 start = time.time()
-test = Lap_seq[1][0].copy()
-for i in range (0, Lap_seq[1][0].shape[0]):
-    for j in range (0, Lap_seq[1][0].shape[1]):
-        time_stack = []
-        
-        for k in range (0, 100):
-            time_stack.append(Lap_seq[1][k][i][j])
-            
-        time_stack = butter.butter_bandpass_filter(time_stack, Low_freq, High_freq, SR, order=5)
-        
-        for k in range (0, 100):
-            Lap_seq[1][k][i][j] += alpha * time_stack[k]
-            
+for i in range(0, 3):
+    LapSeq[i] = filtering(LapSeq[i], Low_freq, High_freq, SR)
 end = time.time()
 delay = end - start
-print("2nd level : ", delay)
-
-
-# In[11]:
-
-
-# level 2
-start = time.time()
-for i in range (0, Lap_seq[2][0].shape[0]):
-    for j in range (0, Lap_seq[2][0].shape[1]):
-        time_stack = []
-        
-        for k in range (0, 100):
-            time_stack.append(Lap_seq[2][k][i][j])
-            
-        time_stack = butter.butter_bandpass_filter(time_stack, Low_freq, High_freq, SR, order=5)
-        
-        for k in range (0, 100):
-            Lap_seq[2][k][i][j] += time_stack[k]
-            
-end = time.time()
-delay = end - start
-print("3nd level : ", delay)
+print("delay : ", delay)
 
 
 # In[12]:
 
 
+# Gaussian + Laplacian ->
 Rec2= []
-for i in range (0, 100):
-    Sum = Lap_seq[2][i] + Gau_seq[2][i]
+for i in range (0, len(LapSeq[0])):
+    Sum = LapSeq[2][i] + GauSeq[2][i]
     Rec2.append(Sum)
 
-for i in range (0, 100):
+for i in range (0, len(LapSeq[0])):
     Rec2[i] = pyramidUp(Rec2[i])
 
 Rec1 = []
-for i in range (0, 100):
-    Sum = Lap_seq[1][i] + Rec2[i]
-    #Sum = Lap_seq[1][i] + Gau_seq[1][i]
+for i in range (0, len(LapSeq[0])):
+    Sum = LapSeq[1][i] + Rec2[i]
     Rec1.append(Sum)
     
-for i in range (0, 100):
+for i in range (0, len(LapSeq[0])):
     Rec1[i] = pyramidUp(Rec1[i])
 
 Rec0 = []
-for i in range (0, 100):
-    Sum = Lap_seq[0][i]+ Rec1[i]
+for i in range (0, len(LapSeq[0])):
+    Sum = LapSeq[0][i]+ Rec1[i]
     Rec0.append(Sum)
 
 
@@ -249,7 +187,7 @@ for i in range (0, 100):
 
 # 형변환 및 오버플로우 방지
 
-for i in range(0, 100):
+for i in range(0, len(Rec0)):
     Rec0[i][Rec0[i]<0] = 0
     Rec0[i][Rec0[i]>1] = 1
     Rec0[i] *= 255
@@ -270,12 +208,6 @@ for i in range (0, len(Rec0)):
     out.write(Rec0[i])
     
 out.release()
-
-
-# In[15]:
-
-
-(Lap_seq[1][0]-test).max()
 
 
 # In[ ]:
